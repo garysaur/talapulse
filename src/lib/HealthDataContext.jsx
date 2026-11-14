@@ -1,95 +1,48 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
-const HealthDataContext = createContext(null);
+const Context = createContext(null);
+const KEY = 'astrohealth.records.v1';
+const profile = { full_name:'Cmdr. Elena Vasquez', call_sign:'VEGA', role:'Flight Engineer · Mission Specialist', mission_name:'Artemis Orbital Analogue III', agency:'Fictional crew profile', mission_day:127 };
+const initial = Array.from({ length: 14 }, (_, i) => {
+  const d = new Date(Date.now() - (13-i) * 86400000);
+  return { id:`seed-${i}`, source:'manual', recorded_at:d.toISOString(), heart_rate:66+Math.round(Math.sin(i)*3), systolic:116+Math.round(Math.cos(i)*3), diastolic:75+Math.round(Math.sin(i/2)*2), sleep_hours:+(7.2+Math.sin(i/2)*.5).toFixed(1), fatigue:Math.max(1,Math.min(10,4+Math.round(Math.cos(i)*1.5))), mood:Math.max(1,Math.min(5,4+Math.round(Math.sin(i/3)))), notes:i%4===0?'Nominal day — exercise and maintenance':'' };
+}).reverse();
+const defaults = { profile, analysis:null, sensorLatest:null, counts:{total:0,manual:0,sensor:0}, serverTime:new Date().toISOString() };
 
-const MOCK_DATA = {
-  profile: {
-    full_name: 'Cmdr. Elena Vasquez',
-    call_sign: 'VEGA',
-    role: 'Flight Engineer · Mission Specialist',
-    mission_name: 'Artemis Orbital Analogue III',
-    agency: 'Fictional crew profile',
-    notes: 'Synthetic astronaut profile created for the AstroHealth Monitor proof of concept.',
-    mission_day: 27,
-  },
-  analysis: {
-    overall: 'stable',
-    headline: 'All recorded measurements sit inside your recent personal range.',
-    latestCheckin: { recorded_at: new Date().toISOString() },
-    metricMap: {
-      heart_rate: { label: 'Heart rate', value: 68, display: '68', unit: 'bpm', state: 'stable', deltaText: '+2 bpm vs baseline', baseline: 66, series: [64, 66, 68, 67, 69, 68] },
-      systolic: { label: 'Systolic pressure', value: 118, display: '118', unit: 'mmHg', state: 'stable', deltaText: '+2 / +1 mmHg vs baseline', baseline: 116, series: [112, 114, 115, 117, 118] },
-      diastolic: { label: 'Diastolic pressure', value: 76, display: '76', unit: 'mmHg', state: 'stable', deltaText: '+1 vs baseline', baseline: 75, series: [74, 75, 76, 77, 76] },
-      sleep_hours: { label: 'Sleep duration', value: 7.4, display: '7.4', unit: 'hours', state: 'stable', deltaText: '+0.2 h vs baseline', baseline: 7.2, series: [6.8, 7.0, 7.4, 7.3, 7.5] },
-      fatigue: { label: 'Fatigue', value: 4, display: '4', unit: '/10', state: 'stable', deltaText: 'Level with baseline', baseline: 4, series: [4, 4, 5, 4, 4] },
-      mood: { label: 'Mood', value: 4, display: '4', unit: '/5', state: 'stable', deltaText: '+1 vs baseline', baseline: 3, series: [3, 4, 4, 4, 4] },
-    },
-    flags: [],
-    changes: [],
-  },
-  sensorLatest: { recorded_at: new Date().toISOString(), heart_rate: 69, oxygen_percent: 97.8, co2_mmhg: 38.5, respiration_rate: 15.2, airflow_lpm: 7.2, skin_temp_c: 36.4, gas_pressure_kpa: 101.2 },
-  counts: { total: 14, manual: 11, sensor: 3 },
-  serverTime: new Date().toISOString(),
-};
-
-export function HealthDataProvider({ children }) {
-  const [data, setData] = useState(MOCK_DATA);
-  const [pending, setPending] = useState([]);
-  const [online, setOnline] = useState(true);
-  const [syncing, setSyncing] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      setData(MOCK_DATA);
-      setError(null);
-      return MOCK_DATA;
-    } catch (err) {
-      setError(err);
-      throw err;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const syncNow = useCallback(async () => ({ synced: 0, remaining: 0 }), []);
-
-  const submitCheckin = useCallback(async (payload) => {
-    const result = {
-      queued: false,
-      result: {
-        overall: 'stable',
-        headline: 'Check-in stored against your fictional profile.',
-        analysis: {
-          baselineCount: 5,
-          metricMap: {
-            heart_rate: { label: 'Heart rate', display: payload.heart_rate || 68, unit: 'bpm', state: 'stable', deltaText: 'Level with baseline' },
-            systolic: { label: 'Systolic pressure', display: payload.systolic || 118, unit: 'mmHg', state: 'stable', deltaText: 'Level with baseline' },
-            diastolic: { label: 'Diastolic pressure', display: payload.diastolic || 76, unit: 'mmHg', state: 'stable', deltaText: 'Level with baseline' },
-            sleep_hours: { label: 'Sleep duration', display: payload.sleep_hours || 7.4, unit: 'h', state: 'stable', deltaText: 'Level with baseline' },
-            fatigue: { label: 'Fatigue', display: payload.fatigue || 4, unit: '/10', state: 'stable', deltaText: 'Level with baseline' },
-            mood: { label: 'Mood', display: payload.mood || 4, unit: '/5', state: 'stable', deltaText: 'Level with baseline' },
-          },
-          overall: 'stable',
-        },
-      },
-    };
-    return result;
-  }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  const value = useMemo(() => ({ data, loading, error, refresh, pending, online, syncing, syncNow, submitCheckin }), [data, loading, error, refresh, pending, online, syncing, syncNow, submitCheckin]);
-
-  return <HealthDataContext.Provider value={value}>{children}</HealthDataContext.Provider>;
+function analyze(records) {
+  const manual = records.filter(r=>r.source!=='puma_sim').sort((a,b)=>new Date(b.recorded_at)-new Date(a.recorded_at));
+  const latest = manual[0];
+  const specs = [['heart_rate','Heart rate','bpm',0],['systolic','Systolic pressure','mmHg',0],['diastolic','Diastolic pressure','mmHg',0],['sleep_hours','Sleep duration','h',1],['fatigue','Fatigue','/10',0],['mood','Mood','/5',0]];
+  const metricMap = {};
+  for (const [key,label,unit,decimals] of specs) {
+    const values=manual.slice(1,31).map(r=>Number(r[key])).filter(Number.isFinite).sort((a,b)=>a-b);
+    const baseline=values.length>=5?(values.length%2?values[(values.length-1)/2]:(values[values.length/2-1]+values[values.length/2])/2):null;
+    const value=latest?.[key] == null ? null : Number(latest[key]);
+    const delta=baseline==null||value==null?null:value-baseline;
+    const state=delta==null?'calibrating':Math.abs(delta)>((key==='fatigue'||key==='mood')?2:Math.max(3,baseline*.14))?'observe':'stable';
+    metricMap[key]={key,label,unit,decimals,value,display:value==null?'—':value.toFixed(decimals),baseline,delta,state,series:manual.slice(0,14).reverse().map(r=>Number(r[key])).filter(Number.isFinite),deltaText:delta==null?'Baseline not established yet':`${delta>0?'+':''}${delta.toFixed(decimals)} ${unit} vs baseline`,explanation:delta==null?'Not enough previous check-ins to establish a personal baseline.':`${label} is ${delta>0?'above':'below'} your recent personal baseline.`};
+  }
+  const flags=Object.values(metricMap).filter(m=>m.state==='observe'||m.state==='attention').map(m=>m.key);
+  const overall=Object.values(metricMap).every(m=>m.state==='calibrating')?'calibrating':flags.length?'observe':'stable';
+  const changes=flags.map(key=>({key,label:`${metricMap[key].label} changed`,detail:metricMap[key].deltaText,note:metricMap[key].explanation,state:metricMap[key].state}));
+  return {hasRecords:!!latest,latestCheckin:latest??null,baselineCount:Math.max(0,manual.length-1),overall,headline:!latest?'No check-ins recorded yet. Complete a daily check-in to begin personal baseline monitoring.':flags.length?metricMap[flags[0]].explanation:'All recorded measurements sit inside your recent personal range.',metricMap,metrics:Object.values(metricMap),flags,changes};
 }
-
-export function useHealthData() {
-  const context = useContext(HealthDataContext);
-  if (!context) throw new Error('useHealthData must be used inside HealthDataProvider');
-  return context;
+function makeData(records) {
+ const sorted=[...records].sort((a,b)=>new Date(b.recorded_at)-new Date(a.recorded_at));
+ return {...defaults,analysis:analyze(sorted),sensorLatest:sorted.find(r=>r.source==='puma_sim')??null,counts:{total:sorted.length,manual:sorted.filter(r=>r.source!=='puma_sim').length,sensor:sorted.filter(r=>r.source==='puma_sim').length},serverTime:new Date().toISOString()};
 }
+export function HealthDataProvider({children}) {
+ const [records,setRecords]=useState(initial);
+ const [pending,setPending]=useState([]);
+ const [online,setOnline]=useState(typeof navigator==='undefined'?true:navigator.onLine);
+ const [loading,setLoading]=useState(false);
+ useEffect(()=>{try{const saved=localStorage.getItem(KEY);if(saved)setRecords(JSON.parse(saved));else localStorage.setItem(KEY,JSON.stringify(initial));}catch{};const on=()=>setOnline(true),off=()=>setOnline(false);window.addEventListener('online',on);window.addEventListener('offline',off);return()=>{window.removeEventListener('online',on);window.removeEventListener('offline',off)}},[]);
+ const data=useMemo(()=>makeData(records),[records]);
+ const refresh=useCallback(async()=>data,[data]);
+ const syncNow=useCallback(async()=>({synced:0,remaining:pending.length}),[pending.length]);
+ const submitCheckin=useCallback(async(payload)=>{const entry={...payload,id:`manual-${Date.now()}`,source:'manual',recorded_at:new Date().toISOString()};setRecords(old=>{const next=[entry,...old];try{localStorage.setItem(KEY,JSON.stringify(next));}catch{}return next;});return {queued:false,result:{...makeData([entry,...records]).analysis,analysis:makeData([entry,...records]).analysis,overall:makeData([entry,...records]).analysis.overall,headline:'Check-in recorded in this browser.'}}},[records]);
+ const runSensor=useCallback(async()=>{const r={...Object.fromEntries([['heart_rate',58+Math.round(Math.random()*34)],['oxygen_percent',+(95+Math.random()*3.9).toFixed(1)],['co2_mmhg',+(33+Math.random()*11).toFixed(1)],['respiration_rate',+(11+Math.random()*8).toFixed(1)],['airflow_lpm',+(5.2+Math.random()*4.6).toFixed(1)],['skin_temp_c',+(35.6+Math.random()*1.6).toFixed(1)],['gas_pressure_kpa',+(100.4+Math.random()*1.5).toFixed(1)]]),id:`sensor-${Date.now()}`,source:'puma_sim',recorded_at:new Date().toISOString(),notes:'Synthetic PUMA-inspired sample generated by the prototype simulator.'};setRecords(old=>{const next=[r,...old];try{localStorage.setItem(KEY,JSON.stringify(next));}catch{}return next});return r},[]);
+ const value=useMemo(()=>({data,loading,error:null,refresh,pending,online,syncing:false,syncNow,submitCheckin,runSensor,records}),[data,loading,refresh,pending,online,syncNow,submitCheckin,runSensor,records]);
+ return <Context.Provider value={value}>{children}</Context.Provider>;
+}
+export function useHealthData(){const value=useContext(Context);if(!value)throw new Error('useHealthData must be used inside HealthDataProvider');return value;}
